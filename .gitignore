@@ -1,0 +1,8 @@
+.venv/
+
+*.log
+
+*.xlsx
+
+pycache/
+*.py[cod]
