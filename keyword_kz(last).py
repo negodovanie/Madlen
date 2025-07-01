@@ -20,6 +20,7 @@ RATE_LIMIT_DELAY= 1  # секунда между запросами
 
 logging.basicConfig(
     filename=LOG_FILE,
+    filemode='w',
     encoding="utf-8",
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
