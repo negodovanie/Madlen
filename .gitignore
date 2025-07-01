@@ -6,3 +6,8 @@
 
 pycache/
 *.py[cod]
+
+# Игнорировать все .json
+*.json
+# Но не этот – он нужен в репозитории
+!pythonbider-680ebdbe164a.json
