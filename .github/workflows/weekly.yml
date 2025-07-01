@@ -26,9 +26,14 @@ jobs:
         pip install -r requirements.txt
 
     - name: Write Google creds
+      shell: bash
       run: |
-        printf '%s' "${{ secrets.GCP_CREDENTIALS }}" \
-          > level-landing-195008-a8940ac6b2ab.json
+        cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
+        ${{ secrets.GCP_CREDENTIALS }}
+        EOF
+
+    - name: Debug creds (first lines)
+      run: head -n 5 level-landing-195008-a8940ac6b2ab.json
 
     - name: Run keyword_kz
       env:
