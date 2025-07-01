@@ -9,6 +9,3 @@ pycache/
 
 # Игнорировать все .json
 *.json
-# Но не этот – он нужен в репозитории
-!pythonbider-680ebdbe164a.json
-!level-landing-195008-a8940ac6b2ab.json
