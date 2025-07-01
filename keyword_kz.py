@@ -14,7 +14,7 @@ from gspread.exceptions import APIError
 LOG_FILE        = "keyword_kz.log"
 TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
-CREDS_FILE      = "pythonbider-680ebdbe164a.json"
+CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Q581Y7diTnid6zPyduMcfhMpmcjbRs3l7wK_p_EEtgo/edit?gid=45369749#gid=45369749"
 RATE_LIMIT_DELAY= 1  # секунда между запросами
 
