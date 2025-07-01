@@ -27,7 +27,8 @@ jobs:
 
     - name: Write Google creds
       run: |
-        printf '%s' "${{ secrets.GCP_CREDENTIALS }}" > level-landing-195008-a8940ac6b2ab.json
+        printf '%s' "${{ secrets.GCP_CREDENTIALS }}" \
+          > level-landing-195008-a8940ac6b2ab.json
 
     - name: Run keyword_kz
       env:
