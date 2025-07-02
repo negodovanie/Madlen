@@ -50,7 +50,7 @@ jobs:
 
       - name: Write Google creds
         run: |
-          cat << 'EOF' > creds.json
+          cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
           ${{ secrets.GCP_CREDENTIALS }}
           EOF
 
