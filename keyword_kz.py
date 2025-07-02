@@ -15,7 +15,7 @@ LOG_FILE        = "keyword_kz.log"
 TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
 CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1m5YlDDYlqq4ktA2UAnLJWdG-SXksnaE2LokUpPNsZhs/edit?gid=45369749#gid=45369749"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1tvLCWC5WhBnQAFQpoJsVUXnjtDlzjRbJwzmsYgM8b8c/edit?gid=45369749#gid=45369749"
 RATE_LIMIT_DELAY= 1  # секунда между запросами
 
 logging.basicConfig(
