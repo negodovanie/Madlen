@@ -15,7 +15,7 @@ LOG_FILE        = "keyword_kz.log"
 TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
 CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1tvLCWC5WhBnQAFQpoJsVUXnjtDlzjRbJwzmsYgM8b8c/edit?gid=2042365344#gid=2042365344"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1m5YlDDYlqq4ktA2UAnLJWdG-SXksnaE2LokUpPNsZhs/edit?gid=45369749#gid=45369749"
 RATE_LIMIT_DELAY= 1  # секунда между запросами
 
 logging.basicConfig(
@@ -139,29 +139,65 @@ def fetch_competitors_history(project_name, keyword_id, date_range):
 
 
 def build_sheet_data(project_name, keywords_data, date_range, target_date):
+    """
+    first  — строки для листа Keywords,
+    second — строки для листа Competitors.
+
+    Если в history нет блока по target_date (в формате "Jun 30, 2025"),
+    берём блок с максимальной датой (тоже в том же формате).
+    """
     first, second = [], []
+
     for item in keywords_data:
         kid  = item["id"]
         attr = item.get("attributes", {})
         kw   = attr.get("kw")
         ru   = attr.get("rankingurl")
         ua   = attr.get("updated_at")
-        first.append({"ID": kid, "Keyword": kw, "Ranking URL": ru, "Updated At": ua})
+        first.append({
+            "ID": kid,
+            "Keyword": kw,
+            "Ranking URL": ru,
+            "Updated At": ua
+        })
 
         history = fetch_competitors_history(project_name, kid, date_range)
-        ctr = 1
-        for blk in history:
-            # blk['date'] теперь сравнивается с target_date == "YYYY-MM-DD"
-            if blk.get("date") == target_date:
-                for r in blk.get("results", []):
-                    second.append({
-                        "ID": kid,
-                        "Keyword": kw,
-                        "URL": r.get("url"),
-                        "Row Number": ctr
-                    })
-                    ctr += 1
+
+        # 1) Сначала пытаемся найти точный блок по target_date
+        chosen = next(
+            (blk for blk in history if blk.get("date") == target_date),
+            None
+        )
+
+        # 2) Если не нашли и history непустая — берём самый свежий по дате
+        if chosen is None and history:
+            # парсим дату вида "Jun 30, 2025"
+            def parse_blk_date(b):
+                try:
+                    return datetime.strptime(b.get("date",""), "%b %d, %Y")
+                except Exception:
+                    return datetime.min
+
+            chosen = max(history, key=parse_blk_date)
+            logger.info(
+                "(%s:%s) для даты %s данных нет, взяли самый свежий блок %s",
+                project_name, kid, target_date, chosen.get("date")
+            )
+
+        # 3) Если в `chosen` что-то есть — раскладываем его результаты
+        if chosen:
+            ctr = 1
+            for res in chosen.get("results", []):
+                second.append({
+                    "ID":         kid,
+                    "Keyword":    kw,
+                    "URL":        res.get("url"),
+                    "Row Number": ctr
+                })
+                ctr += 1
+
         time.sleep(RATE_LIMIT_DELAY)
+
     return first, second
 
 
@@ -236,78 +272,131 @@ def build_competitors_keyword_map(comp_df, domain):
 
 
 def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
-    # Подготовка констант
-    CITY_COL = 4  # D
-    COLS = [13, 20, 27]  # M, T, AA
+    CITY_COL  = 4       # D
+    COMP_COLS = [13,20,27]  # M, T, AA
+    FORMULA_COLS = [11, 19, 26, 33, 39, 45]  # K, S, Z, AG, AM, AS
 
-    insert_operations = []
-    append_rows = []
+    # Собираем два списка: matched — те, где нашли gs_row и есть rns
+    matched = []
+    new     = []
+
+    for _, r in kw_df.iterrows():
+        kw   = r["Keyword"].strip()
+        ru0  = r["Ranking URL"].strip()
+        key  = (kw.lower(), normalize_url(ru0))
+        gs_row = gs_map.get(key)
+        rns     = comp_map.get(key, [])
+        urls    = comp_kw_map.get(kw.lower(), [])[:3]
+
+        if gs_row is not None and rns:
+            matched.append({
+                "kw":     kw,
+                "ru0":    ru0,
+                "gs_row": gs_row,
+                "rns":    rns,
+                "urls":   urls
+            })
+        else:
+            new.append({
+                "kw":  kw,
+                "ru0": ru0,
+                "rns": rns,
+                "urls":urls
+            })
+
     batch = []
     shift = 0
 
-    for _, r in kw_df.iterrows():
-        kw = str(r["Keyword"]).strip()
-        ru0 = str(r["Ranking URL"]).strip()
-        ru = normalize_url(ru0)
-        key = (kw.lower(), ru)
-        gs_row = gs_map.get(key)
-        rns = comp_map.get(key, [])
-        urls = comp_kw_map.get(kw.lower(), [])[:3]
+    # 1) Обработка найденных: INSERT rows сразу под каждой найденной строкой
+    for item in matched:
+        kw      = item["kw"]
+        ru0     = item["ru0"]
+        gs_row  = item["gs_row"]
+        rns     = item["rns"]
+        urls    = item["urls"]
 
-        if gs_row is not None:
-            # Найдена существующая строка, вставляем новые competitor-строки сразу под ней
-            prev_city = ws.cell(gs_row, CITY_COL).value or ""
-            new_rows = []
-            for i, rn in enumerate(rns, start=1):
-                new_rows.append([gs_date, kw, ru0, prev_city, rn])
-            insert_pos = gs_row + shift + 1
-            insert_operations.append((insert_pos, new_rows))
-            shift += len(new_rows)
+        # город из колонки D той же найденной строки
+        prev_city = ws.cell(gs_row, CITY_COL).value or ""
 
-            # Batch-запросы на заполнение колонок M,T,AA для первой вставленной строки
-            for col_idx, url in zip(COLS, urls):
-                batch.append({
-                    "range": f"'{ws.title}'!{rowcol_to_a1(insert_pos, col_idx)}",
-                    "values": [[url]]
+        # формируем список строк для вставки
+        new_rows = [[gs_date, kw, ru0, prev_city, rn] for rn in rns]
+
+        insert_at = gs_row + shift + 1
+        retry_on_quota(ws.insert_rows, new_rows, row=insert_at)
+        shift += len(new_rows)
+
+        sheet_id = ws._properties['sheetId']
+        copy_requests = []
+
+        for offset in range(len(new_rows)):
+            src_row = insert_at + offset - 1  # строка-источник
+            dst_row = insert_at + offset  # строка-назначения
+
+            for col in FORMULA_COLS:
+                copy_requests.append({
+                    "copyPaste": {
+                        "source": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": src_row - 1,
+                            "endRowIndex": src_row,  # не включительно
+                            "startColumnIndex": col - 1,
+                            "endColumnIndex": col
+                        },
+                        "destination": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": dst_row - 1,
+                            "endRowIndex": dst_row,
+                            "startColumnIndex": col - 1,
+                            "endColumnIndex": col
+                        },
+                        "pasteType": "PASTE_FORMULA",
+                        "pasteOrientation": "NORMAL"
+                    }
                 })
-        else:
-            # Новая ключ-фраза → в конец
-            append_rows.append([gs_date, kw, ru0, "", rns[0] if rns else ""])
-            # номер будущей строки определим позже
 
-    # 1) В середине листа вставляем
-    for pos, rows_to_insert in sorted(insert_operations, key=lambda x: x[0]):
-        retry_on_quota(ws.insert_rows, rows_to_insert, row=pos)
+        if copy_requests:
+            retry_on_quota(ws.spreadsheet.batch_update, {"requests": copy_requests})
 
-    # 2) В конец листа добавляем новые
-    if append_rows:
+        # в каждую вставленную строку пишем конкурентные URL
+        # (держим только первые len(urls) строкок, если хотим в каждую по одному URL)
+        # потом вставляем первые N URL-ов, где N = min(len(rns), len(urls))
+        for i, url in enumerate(urls):
+            cell = rowcol_to_a1(insert_at, COMP_COLS[i])
+            batch.append({
+                "range": f"'{ws.title}'!{cell}",
+                "values": [[url]]
+            })
+
+    # 2) Обработка новых: вписываем в первую пустую строку по A, затем по следующей и т.д.
+    if new:
         first_empty = find_first_empty_row_in_col_A(ws)
-        retry_on_quota(
-            ws.insert_rows,
-            append_rows,
-            row=first_empty,
-            value_input_option="USER_ENTERED"
-        )
-        # Заполняем конкурентов для append_rows
-        for i, r in enumerate(append_rows):
-            row_num = first_empty + i
-            kw = r[1]
-            urls = comp_kw_map.get(kw.lower(), [])[:3]
-            for col_idx, url in zip(COLS, urls):
-                batch.append({
-                    "range": f"'{ws.title}'!{rowcol_to_a1(row_num, col_idx)}",
-                    "values": [[url]]
-                })
+        row_ptr     = first_empty
 
-    # 3) Отправляем batch-запрос
+        for item in new:
+            kw   = item["kw"]
+            ru0  = item["ru0"]
+            rns  = item["rns"]
+            urls = item["urls"]
+
+            first_rn = rns[0] if rns else ""
+
+            # A–E
+            batch.append({
+                "range": f"'{ws.title}'!A{row_ptr}:E{row_ptr}",
+                "values": [[gs_date, kw, ru0, "", first_rn]]
+            })
+
+            # M/T/AA
+            for i, url in enumerate(urls):
+                cell = rowcol_to_a1(row_ptr, COMP_COLS[i])
+                batch.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
+
+            # «зарезервируем» эту строку, чтобы не переписать её
+            gs_map[(kw.lower(), normalize_url(ru0))] = row_ptr
+            row_ptr += 1
+
+    # 3) Выполняем batch-апдейт всех URL (и A–E для новых)
     if batch:
-        # DEBUG: сохраним batch в json, чтобы посмотреть, какие ranges и values у нас получились
-        import json, os
-        dump_file = f"batch_{ws.title.replace(' ', '_')}.json"
-        with open(dump_file, "w", encoding="utf-8") as f:
-            json.dump(batch, f, ensure_ascii=False, indent=2)
-        logger.info("  → дамп batch-запроса: %s", dump_file)
-
         body = {"valueInputOption": "USER_ENTERED", "data": batch}
         retry_on_quota(ws.spreadsheet.values_batch_update, body)
         logger.info("Batch update: %d ячеек на листе %s", len(batch), ws.title)
