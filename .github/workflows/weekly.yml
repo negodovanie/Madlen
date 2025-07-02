@@ -1,42 +1,60 @@
-# .github/workflows/weekly.yml
-name: Run keyword_kz weekly
+name: Run keyword_kz bi-weekly
 
-# Запуск по расписанию: каждое воскресенье в 03:00 UTC
 on:
+  # каждый день в 03:00 UTC → 06:00 MSK
   schedule:
-    - cron: '0 3 * * 0'
-  workflow_dispatch: # позволяет запускать вручную из UI
+    - cron:  '0 3 * * *'
+  workflow_dispatch:
 
 jobs:
-  weekly-run:
+  biweekly:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Check 14-day interval
+        run: |
+          # Возьмём за «первый запуск» какую-нибудь дату, когда точно надо было запуститься.
+          # Например, 2025-07-01 06:00 MSK:
+          BASE="2025-07-02 03:00 UTC"
+          # превратим в секунды
+          base_ts=$(date -d "$BASE" +%s)
+          now_ts=$(date +%s)
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+          # сколько целых дней прошло?
+          days=$(( (now_ts - base_ts) / 86400 ))
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+          if (( days < 0 )); then
+            echo "Ещё до первого запуска ($BASE)." 
+            exit 0
+          fi
 
-    - name: Write Google creds
-      shell: bash
-      run: |
-        cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
-        ${{ secrets.GCP_CREDENTIALS }}
-        EOF
+          if (( days % 14 != 0 )); then
+            echo "Сегодня прошло $days дней с базовой даты — не делится на 14. Выходим."
+            exit 0
+          fi
 
-    - name: Debug creds (first lines)
-      run: head -n 5 level-landing-195008-a8940ac6b2ab.json
+          echo "Прошло $days дней — это кратно 14. Поехали дальше!"
 
-    - name: Run keyword_kz
-      env:
-        TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
-      run: |
-        python keyword_kz.py
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Google creds
+        run: |
+          cat << 'EOF' > creds.json
+          ${{ secrets.GCP_CREDENTIALS }}
+          EOF
+
+      - name: Run keyword_kz
+        env:
+          TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
+        run: python keyword_kz.py
