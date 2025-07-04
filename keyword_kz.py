@@ -15,7 +15,7 @@ LOG_FILE        = "keyword_kz.log"
 TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
 CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1tvLCWC5WhBnQAFQpoJsVUXnjtDlzjRbJwzmsYgM8b8c/edit?gid=45369749#gid=45369749"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/15SRs1ZV5204S7e-_3nEfWNbuaX3Ssp8pegVGISoIXUs/edit?gid=45369749#gid=45369749"
 RATE_LIMIT_DELAY= 1  # секунда между запросами
 
 logging.basicConfig(
@@ -76,8 +76,10 @@ def find_analysis_sheets(spreadsheet_url, creds_file):
 def get_dates():
     # вчерашний день
     yesterday  = datetime.today() - timedelta(days=1)
+    twoweek = datetime.today() - timedelta(days=14)
     single     = yesterday.strftime("%Y-%m-%d")        # для API-запроса dateRange
-    date_range = f"{single}.{single}"
+    twoweek = twoweek.strftime("%Y-%m-%d")
+    date_range = f"{twoweek}.{single}"
     # target_date теперь — в формате "Jun 30, 2025", как у API:
     target     = yesterday.strftime("%b %d, %Y")
     # gs_date для Google-таблицы
