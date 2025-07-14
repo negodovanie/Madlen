@@ -2,7 +2,7 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC (06:00 MSK)
+    - cron: '0 3 * * 2'    # каждый понедельник в 03:00 UTC (06:00 MSK)
   workflow_dispatch:
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
           week_num=$(date +%V)
           echo "Сегодня неделя №${week_num}"
 
-          if (( week_num % 2 == 0 )); then
+          if (( week_num % 2 != 0 )); then
             echo "::set-output name=is_even::true"
           else
             echo "::set-output name=is_even::false"
