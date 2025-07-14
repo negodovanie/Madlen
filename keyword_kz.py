@@ -15,7 +15,7 @@ LOG_FILE        = "keyword_kz.log"
 TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
 CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1LWQiYvZzpI_N34VKclMZvYvHXAp4Rbk1XI70UuxDz-w/edit?gid=45369749#gid=45369749"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1MbvGnwQfK2mdw9jFs7C309UrbjH8YOI2MmRr_uvgStI/edit?gid=1523986157#gid=1523986157"
 RATE_LIMIT_DELAY= 1  # секунда между запросами
 
 logging.basicConfig(
@@ -48,7 +48,7 @@ def retry_on_quota(func, *args, max_attempts=5, initial_delay=10, **kwargs):
             raise
     # после всех попыток
     logger.error("Не удалось выполнить %s после %d попыток — выходим", func.__name__, max_attempts)
-    raise APIError(f"Quota retry failed: {func.__name__}")
+    raise RuntimeError(f"Quota retry failed: {func.__name__}")
 
 
 def find_first_empty_row_in_col_A(ws):
@@ -62,8 +62,8 @@ def find_first_empty_row_in_col_A(ws):
 
 def authorize_gspread(creds_file):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope)
-    return gspread.authorize(creds)
+    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope) # type: ignore
+    return gspread.authorize(creds) # type: ignore
 
 
 def find_analysis_sheets(spreadsheet_url, creds_file):
@@ -232,15 +232,16 @@ def build_gs_map(ws):
     Пропускает первую строку (заголовок).
     """
     col_b = ws.col_values(2)   # B
-    col_c = ws.col_values(3)   # C
-    n = min(len(col_b), len(col_c))
+    #col_c = ws.col_values(3)   # C
+    #n = min(len(col_b), len(col_c))
+    #n = len(col_b)
     gs_map = {}
     # i=0 — это шапка, начинаем с i=1 → row = i+1
-    for i in range(1, n):
+    for i in range(1, len(col_b)):   #n
         kw = col_b[i].strip().lower()
-        ru = normalize_url(col_c[i])
-        if kw and ru:
-            gs_map[(kw, ru)] = i + 1
+        #ru = normalize_url(col_c[i])
+        if kw:   #and ru
+            gs_map[(kw)] = i + 1 #ru
     return gs_map
 
 
@@ -259,17 +260,23 @@ def build_competitors_map(comp_df):
 
 def build_competitors_keyword_map(comp_df, domain):
     """
-    Строит словарь Keyword -> список чужих URL (без текущего домена).
-    Фильтрует url, чтобы исключить домен текущего проекта.
+    Строит словарь Keyword -> список чужих URL (без текущего домена и запрещённых подстрок).
     """
     kw_map = {}
+    forbidden_substrings = ["2gis", "m.olx", "kaspi", "olx"]
     for _, r in comp_df.iterrows():
         kw  = str(r["Keyword"]).strip().lower()
         url = str(r["URL"]).strip()
-        if domain not in url:
-            kw_map.setdefault(kw, []).append(url)
-        else:
+        url_lc = url.lower()
+        # Пропускаем, если домен проекта в url
+        if domain in url:
             logger.debug("  → на %s пропускаем конкурент %s, домен совпадает", kw, url)
+            continue
+        # Пропускаем, если url содержит запрещённые подстроки
+        if any(sub in url_lc for sub in forbidden_substrings):
+            logger.debug("  → на %s пропускаем конкурент %s, запрещённая подстрока", kw, url)
+            continue
+        kw_map.setdefault(kw, []).append(url)
     return kw_map
 
 
@@ -285,10 +292,11 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
     for _, r in kw_df.iterrows():
         kw   = r["Keyword"].strip()
         ru0  = r["Ranking URL"].strip()
-        key  = (kw.lower(), normalize_url(ru0))
-        gs_row = gs_map.get(key)
+        kw_lc = kw.lower()
+        gs_row = gs_map.get(kw_lc) # теперь ищем только по ключу!
+        key  = (kw_lc, normalize_url(ru0))
         rns     = comp_map.get(key, [])
-        urls    = comp_kw_map.get(kw.lower(), [])[:3]
+        urls    = comp_kw_map.get(kw_lc, [])[:3]
 
         if gs_row is not None and rns:
             matched.append({
@@ -305,9 +313,9 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
                 "rns": rns,
                 "urls":urls
             })
-
-    batch = []
-    shift = 0
+    
+    matched.sort(key=lambda x: x["gs_row"], reverse=True)
+    
 
     # 1) Обработка найденных: INSERT rows сразу под каждой найденной строкой
     for item in matched:
@@ -317,59 +325,74 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
         rns     = item["rns"]
         urls    = item["urls"]
 
-        # город из колонки D той же найденной строки
         prev_city = ws.cell(gs_row, CITY_COL).value or ""
-
-        # формируем список строк для вставки
         new_rows = [[gs_date, kw, ru0, prev_city, rn] for rn in rns]
-
-        insert_at = gs_row + shift + 1
+        insert_at = gs_row + 1
+        num_rows = len(new_rows)
         retry_on_quota(ws.insert_rows, new_rows, row=insert_at)
-        shift += len(new_rows)
+        try:
+            sheet_id = ws._properties['sheetId']
+            copy_requests = []
 
-        sheet_id = ws._properties['sheetId']
-        copy_requests = []
+            for offset in range(len(new_rows)):
+                src_row = insert_at - 1  # строка-источник (исходная)
+                dst_row = insert_at + offset  # строка-назначения (новая)
 
-        for offset in range(len(new_rows)):
-            src_row = insert_at + offset - 1  # строка-источник
-            dst_row = insert_at + offset  # строка-назначения
+                for col in FORMULA_COLS:
+                    copy_requests.append({
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": src_row - 1,
+                                "endRowIndex": src_row,  # не включительно
+                                "startColumnIndex": col - 1,
+                                "endColumnIndex": col
+                            },
+                            "destination": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": dst_row - 1,
+                                "endRowIndex": dst_row,
+                                "startColumnIndex": col - 1,
+                                "endColumnIndex": col
+                            },
+                            "pasteType": "PASTE_FORMULA",
+                            "pasteOrientation": "NORMAL"
+                        }
+                    })
 
-            for col in FORMULA_COLS:
-                copy_requests.append({
-                    "copyPaste": {
-                        "source": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": src_row - 1,
-                            "endRowIndex": src_row,  # не включительно
-                            "startColumnIndex": col - 1,
-                            "endColumnIndex": col
-                        },
-                        "destination": {
-                            "sheetId": sheet_id,
-                            "startRowIndex": dst_row - 1,
-                            "endRowIndex": dst_row,
-                            "startColumnIndex": col - 1,
-                            "endColumnIndex": col
-                        },
-                        "pasteType": "PASTE_FORMULA",
-                        "pasteOrientation": "NORMAL"
-                    }
+            if copy_requests:
+                retry_on_quota(ws.spreadsheet.batch_update, {"requests": copy_requests})
+
+
+            batch = []
+
+            # в каждую вставленную строку пишем конкурентные URL
+            # (держим только первые len(urls) строкок, если хотим в каждую по одному URL)
+            # потом вставляем первые N URL-ов, где N = min(len(rns), len(urls))
+            for i, url in enumerate(urls):
+                cell = rowcol_to_a1(insert_at, COMP_COLS[i])
+                batch.append({
+                    "range": f"'{ws.title}'!{cell}",
+                    "values": [[url]]
                 })
 
-        if copy_requests:
-            retry_on_quota(ws.spreadsheet.batch_update, {"requests": copy_requests})
+            if batch:
+                body = {"valueInputOption": "USER_ENTERED", "data": batch}
+                retry_on_quota(ws.spreadsheet.values_batch_update, body)
+                logger.info("Batch update (matched): %d ячеек на листе %s", len(batch), ws.title)
+        except RuntimeError as e:
+            if "Quota retry failed" in str(e):
+                ws.delete_rows(insert_at, insert_at + num_rows - 1)
+                logger.warning(f"Удалили {num_rows} пустых строк после quota error на заполнении (matched)")
+                continue           
+            else:
+                raise
 
-        # в каждую вставленную строку пишем конкурентные URL
-        # (держим только первые len(urls) строкок, если хотим в каждую по одному URL)
-        # потом вставляем первые N URL-ов, где N = min(len(rns), len(urls))
-        for i, url in enumerate(urls):
-            cell = rowcol_to_a1(insert_at, COMP_COLS[i])
-            batch.append({
-                "range": f"'{ws.title}'!{cell}",
-                "values": [[url]]
-            })
+    # === 2. Затем вставляем new (одним батчем) ===
 
     # 2) Обработка новых: вписываем в первую пустую строку по A, затем по следующей и т.д.
+
+    batch_new = []
     if new:
         first_empty = find_first_empty_row_in_col_A(ws)
         row_ptr     = first_empty
@@ -383,7 +406,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
             first_rn = rns[0] if rns else ""
 
             # A–E
-            batch.append({
+            batch_new.append({
                 "range": f"'{ws.title}'!A{row_ptr}:E{row_ptr}",
                 "values": [[gs_date, kw, ru0, "", first_rn]]
             })
@@ -391,17 +414,17 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
             # M/T/AA
             for i, url in enumerate(urls):
                 cell = rowcol_to_a1(row_ptr, COMP_COLS[i])
-                batch.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
+                batch_new.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
 
             # «зарезервируем» эту строку, чтобы не переписать её
             gs_map[(kw.lower(), normalize_url(ru0))] = row_ptr
             row_ptr += 1
 
     # 3) Выполняем batch-апдейт всех URL (и A–E для новых)
-    if batch:
-        body = {"valueInputOption": "USER_ENTERED", "data": batch}
+    if batch_new:
+        body = {"valueInputOption": "USER_ENTERED", "data": batch_new}
         retry_on_quota(ws.spreadsheet.values_batch_update, body)
-        logger.info("Batch update: %d ячеек на листе %s", len(batch), ws.title)
+        logger.info("Batch update: %d ячеек на листе %s", len(batch_new), ws.title)
 
 
 def process_sheet(ws, single_date, date_range, target_date, gs_date):
