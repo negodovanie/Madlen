@@ -16,7 +16,7 @@ TOKEN           = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
 EXCEL_FILE      = "keywords_full_data.xlsx"
 CREDS_FILE      = "level-landing-195008-a8940ac6b2ab.json"
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1MbvGnwQfK2mdw9jFs7C309UrbjH8YOI2MmRr_uvgStI/edit?gid=1523986157#gid=1523986157"
-RATE_LIMIT_DELAY= 1  # секунда между запросами
+RATE_LIMIT_DELAY= 2  # секунда между запросами
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -330,6 +330,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
         insert_at = gs_row + 1
         num_rows = len(new_rows)
         retry_on_quota(ws.insert_rows, new_rows, row=insert_at)
+        time.sleep(2)
         try:
             sheet_id = ws._properties['sheetId']
             copy_requests = []
@@ -380,6 +381,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
                 body = {"valueInputOption": "USER_ENTERED", "data": batch}
                 retry_on_quota(ws.spreadsheet.values_batch_update, body)
                 logger.info("Batch update (matched): %d ячеек на листе %s", len(batch), ws.title)
+                time.sleep(2)  # пауза после batch update
         except RuntimeError as e:
             if "Quota retry failed" in str(e):
                 ws.delete_rows(insert_at, insert_at + num_rows - 1)
@@ -425,6 +427,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
         body = {"valueInputOption": "USER_ENTERED", "data": batch_new}
         retry_on_quota(ws.spreadsheet.values_batch_update, body)
         logger.info("Batch update: %d ячеек на листе %s", len(batch_new), ws.title)
+        time.sleep(2)  # пауза после batch update
 
 
 def process_sheet(ws, single_date, date_range, target_date, gs_date):
@@ -476,6 +479,7 @@ def main():
     for ws in analysis_sheets:
         try:
             process_sheet(ws, single_date, date_range, target_date, gs_date)
+            time.sleep(3)  # пауза между листами
         except Exception as e:
             logger.error(f"Ошибка обработки листа {ws.title}: {e}", exc_info=True)
 
