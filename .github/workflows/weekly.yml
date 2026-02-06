@@ -2,31 +2,29 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # Понедельник 03:00 UTC
-  workflow_dispatch:       # Кнопка ручного запуска
+    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC (06:00 MSK)
+  workflow_dispatch:
 
 jobs:
   biweekly:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check trigger condition
+      - name: Check even week number
         id: check_week
         shell: bash
         run: |
-          # Получаем номер недели (убираем ноль в начале, чтобы не было ошибок)
-          week_num=$(date +%-V)
-          echo "Current week: $week_num"
-          
-          # Если нажата кнопка ИЛИ неделя нечетная -> РАЗРЕШАЕМ
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ $((week_num % 2)) -ne 0 ]; then
-            echo "is_even=true" >> $GITHUB_OUTPUT
-            echo "✅ Запуск разрешен."
+          # Получаем номер ISO-недели (01..53)
+          week_num=$(date +%V)
+          echo "Сегодня неделя №${week_num}"
+
+          if (( week_num % 2 != 0 )); then
+            echo "::set-output name=is_even::true"
           else
-            echo "is_even=false" >> $GITHUB_OUTPUT
-            echo "⛔ Пропуск (четная неделя)."
+            echo "::set-output name=is_even::false"
           fi
 
+      # дальше все шаги — только если неделя чётная
       - name: Checkout code
         if: steps.check_week.outputs.is_even == 'true'
         uses: actions/checkout@v3
@@ -45,11 +43,10 @@ jobs:
 
       - name: Write Google creds
         if: steps.check_week.outputs.is_even == 'true'
-        env:
-          GCP_DATA: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          # printf печатает ключ точно как есть, не добавляя лишних пробелов и переносов
-          printf "%s" "$GCP_DATA" > level-landing-195008-a8940ac6b2ab.json
+          cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
+          ${{ secrets.GCP_CREDENTIALS }}
+          EOF
 
       - name: Run keyword_kz
         if: steps.check_week.outputs.is_even == 'true'
