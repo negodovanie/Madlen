@@ -2,8 +2,8 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # Понедельник 03:00 UTC
-  workflow_dispatch:       # Кнопка ручного запуска
+    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC
+  workflow_dispatch:       # Разрешает ручной запуск кнопкой
 
 jobs:
   biweekly:
@@ -14,44 +14,44 @@ jobs:
         id: check_week
         shell: bash
         run: |
+          # Получаем номер недели без ведущего нуля (например, 6 вместо 06)
           week_num=$(date +%-V)
-          echo "Неделя: $week_num"
-          
-          # Запускаем, если (неделя нечетная) ИЛИ (нажата кнопка)
+          echo "Сегодня неделя №${week_num}"
+          echo "Событие: ${{ github.event_name }}"
+
+          # Условие: Запуск если неделя нечетная ИЛИ запуск ручной (кнопкой)
           if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-             echo "should_run=true" >> $GITHUB_OUTPUT
-             echo "✅ Условие выполнено."
+            echo "is_even=true" >> $GITHUB_OUTPUT
+            echo "Результат: Работаем."
           else
-             echo "should_run=false" >> $GITHUB_OUTPUT
-             echo "⛔ Пропускаем (четная неделя)."
+            echo "is_even=false" >> $GITHUB_OUTPUT
+            echo "Результат: Пропускаем."
           fi
 
       - name: Checkout code
-        if: steps.check_week.outputs.should_run == 'true'
+        if: steps.check_week.outputs.is_even == 'true'
         uses: actions/checkout@v3
 
       - name: Set up Python
-        if: steps.check_week.outputs.should_run == 'true'
+        if: steps.check_week.outputs.is_even == 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        if: steps.check_week.outputs.should_run == 'true'
+        if: steps.check_week.outputs.is_even == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # САМЫЙ НАДЕЖНЫЙ МЕТОД: Python запишет файл напрямую без лишних пробелов
       - name: Write Google creds
-        if: steps.check_week.outputs.should_run == 'true'
-        env:
-          GCP_JSON: ${{ secrets.GCP_CREDENTIALS }}
+        if: steps.check_week.outputs.is_even == 'true'
         run: |
-          python3 -c "import os; open('level-landing-195008-a8940ac6b2ab.json', 'w').write(os.environ['GCP_JSON'])"
+          # Пишем секрет напрямую в файл без лишних отступов
+          echo '${{ secrets.GCP_CREDENTIALS }}' > level-landing-195008-a8940ac6b2ab.json
 
       - name: Run keyword_kz
-        if: steps.check_week.outputs.should_run == 'true'
+        if: steps.check_week.outputs.is_even == 'true'
         env:
           TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
         run: python keyword_kz.py
