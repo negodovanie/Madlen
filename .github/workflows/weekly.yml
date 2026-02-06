@@ -2,8 +2,8 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # Запуск каждый понедельник в 03:00 UTC
-  workflow_dispatch:       # Кнопка для ручного запуска
+    - cron: '0 3 * * 1'    # Понедельник 03:00 UTC
+  workflow_dispatch:       # Кнопка ручного запуска
 
 jobs:
   biweekly:
@@ -14,24 +14,17 @@ jobs:
         id: check_week
         shell: bash
         run: |
-          # Получаем номер недели без ведущего нуля (чтобы не было ошибки с 08)
+          # Получаем номер недели (убираем ноль в начале, чтобы не было ошибок)
           week_num=$(date +%-V)
-          echo "Current week number: $week_num"
-          echo "Trigger event: ${{ github.event_name }}"
-
-          # УСЛОВИЕ ЗАПУСКА:
-          # 1. Если это ручной запуск (кнопка) -> ЗАПУСКАЕМ ВСЕГДА.
-          # 2. Если это расписание -> ЗАПУСКАЕМ ТОЛЬКО В НЕЧЕТНЫЕ НЕДЕЛИ.
+          echo "Current week: $week_num"
           
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          # Если нажата кнопка ИЛИ неделя нечетная -> РАЗРЕШАЕМ
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ $((week_num % 2)) -ne 0 ]; then
             echo "is_even=true" >> $GITHUB_OUTPUT
-            echo "✅ Ручной запуск: РАЗРЕШЕНО."
-          elif [ $((week_num % 2)) -ne 0 ]; then
-            echo "is_even=true" >> $GITHUB_OUTPUT
-            echo "✅ Нечетная неделя ($week_num): РАЗРЕШЕНО."
+            echo "✅ Запуск разрешен."
           else
             echo "is_even=false" >> $GITHUB_OUTPUT
-            echo "⛔ Четная неделя ($week_num): ПРОПУСК."
+            echo "⛔ Пропуск (четная неделя)."
           fi
 
       - name: Checkout code
@@ -52,9 +45,11 @@ jobs:
 
       - name: Write Google creds
         if: steps.check_week.outputs.is_even == 'true'
+        env:
+          GCP_DATA: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          # Безопасная запись ключа без лишних пробелов/отступов
-          echo '${{ secrets.GCP_CREDENTIALS }}' > level-landing-195008-a8940ac6b2ab.json
+          # printf печатает ключ точно как есть, не добавляя лишних пробелов и переносов
+          printf "%s" "$GCP_DATA" > level-landing-195008-a8940ac6b2ab.json
 
       - name: Run keyword_kz
         if: steps.check_week.outputs.is_even == 'true'
