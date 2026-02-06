@@ -2,8 +2,8 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # Понедельник 03:00 UTC
-  workflow_dispatch:       # Кнопка ручного запуска
+    - cron: '0 3 * * 1'    # По понедельникам в 06:00 MSK
+  workflow_dispatch:       # Кнопка для ручного запуска
 
 jobs:
   biweekly:
