@@ -44,7 +44,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ВАЖНО: Этот способ создания файла НЕ ломает ключ
+      # ВОТ ЭТО ИСПРАВЛЕНИЕ: Безопасная запись ключа через echo
       - name: Write Google creds
         if: steps.check_week.outputs.should_run == 'true'
         env:
