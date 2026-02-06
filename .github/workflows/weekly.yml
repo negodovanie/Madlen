@@ -2,30 +2,36 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC
-  workflow_dispatch:       # Разрешает ручной запуск кнопкой
+    - cron: '0 3 * * 1'    # Запуск каждый понедельник в 03:00 UTC
+  workflow_dispatch:       # Кнопка для ручного запуска
 
 jobs:
   biweekly:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check even week number
+      - name: Check trigger condition
         id: check_week
         shell: bash
         run: |
-          # Получаем номер недели без ведущего нуля (например, 6 вместо 06)
+          # Получаем номер недели без ведущего нуля (чтобы не было ошибки с 08)
           week_num=$(date +%-V)
-          echo "Сегодня неделя №${week_num}"
-          echo "Событие: ${{ github.event_name }}"
+          echo "Current week number: $week_num"
+          echo "Trigger event: ${{ github.event_name }}"
 
-          # Условие: Запуск если неделя нечетная ИЛИ запуск ручной (кнопкой)
-          if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          # УСЛОВИЕ ЗАПУСКА:
+          # 1. Если это ручной запуск (кнопка) -> ЗАПУСКАЕМ ВСЕГДА.
+          # 2. Если это расписание -> ЗАПУСКАЕМ ТОЛЬКО В НЕЧЕТНЫЕ НЕДЕЛИ.
+          
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "is_even=true" >> $GITHUB_OUTPUT
-            echo "Результат: Работаем."
+            echo "✅ Ручной запуск: РАЗРЕШЕНО."
+          elif [ $((week_num % 2)) -ne 0 ]; then
+            echo "is_even=true" >> $GITHUB_OUTPUT
+            echo "✅ Нечетная неделя ($week_num): РАЗРЕШЕНО."
           else
             echo "is_even=false" >> $GITHUB_OUTPUT
-            echo "Результат: Пропускаем."
+            echo "⛔ Четная неделя ($week_num): ПРОПУСК."
           fi
 
       - name: Checkout code
@@ -47,7 +53,7 @@ jobs:
       - name: Write Google creds
         if: steps.check_week.outputs.is_even == 'true'
         run: |
-          # Пишем секрет напрямую в файл без лишних отступов
+          # Безопасная запись ключа без лишних пробелов/отступов
           echo '${{ secrets.GCP_CREDENTIALS }}' > level-landing-195008-a8940ac6b2ab.json
 
       - name: Run keyword_kz
