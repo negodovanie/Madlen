@@ -14,18 +14,16 @@ jobs:
         id: check_week
         shell: bash
         run: |
-          # Считаем номер недели
           week_num=$(date +%-V)
           echo "Неделя: $week_num"
-          echo "Тип запуска: ${{ github.event_name }}"
-
-          # ЛОГИКА: Запускаем, если (неделя нечетная) ИЛИ (нажата кнопка)
+          
+          # Если (неделя нечетная) ИЛИ (нажата кнопка) -> should_run=true
           if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
              echo "should_run=true" >> $GITHUB_OUTPUT
-             echo "✅ Условие выполнено. Запускаем."
+             echo "✅ Запускаем."
           else
              echo "should_run=false" >> $GITHUB_OUTPUT
-             echo "⛔ Условие не выполнено (четная неделя). Пропускаем."
+             echo "⛔ Пропускаем."
           fi
 
       - name: Checkout code
@@ -44,12 +42,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ВОТ ЭТО ИСПРАВЛЕНИЕ: Безопасная запись ключа через echo
+      # ВЕРНУЛИ ВАШ СТАРЫЙ МЕТОД (CAT), КОТОРЫЙ РАБОТАЛ РАНЬШЕ
       - name: Write Google creds
         if: steps.check_week.outputs.should_run == 'true'
-        env:
-          GCP_DATA: ${{ secrets.GCP_CREDENTIALS }}
-        run: echo "$GCP_DATA" > level-landing-195008-a8940ac6b2ab.json
+        run: |
+          cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
+          ${{ secrets.GCP_CREDENTIALS }}
+          EOF
 
       - name: Run keyword_kz
         if: steps.check_week.outputs.should_run == 'true'
