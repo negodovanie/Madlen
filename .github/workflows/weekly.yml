@@ -2,60 +2,56 @@ name: Run keyword_kz bi-weekly
 
 on:
   schedule:
-    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC (06:00 MSK)
-  workflow_dispatch:       # Разрешает ручной запуск кнопкой
+    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC
+  workflow_dispatch:       # Кнопка ручного запуска
 
 jobs:
   biweekly:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check even week number
-        id: check_week
+      - name: Decision Step
+        id: check
         shell: bash
         run: |
-          # Получаем номер недели (01-53)
-          week_str=$(date +%V)
-          # Переводим в число (удаляем ведущий ноль через 10#), чтобы не было ошибок с 08/09
-          week_num=$((10#$week_str))
-          
-          echo "Текущая неделя: $week_num"
-          echo "Тип запуска: ${{ github.event_name }}"
-
-          # Условие: Если (неделя нечетная) ИЛИ (запуск кнопкой)
-          if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "is_even=true" >> $GITHUB_OUTPUT
-            echo "✅ РЕШЕНИЕ: Запускаем."
-          else
-            echo "is_even=false" >> $GITHUB_OUTPUT
-            echo "⛔ РЕШЕНИЕ: Пропускаем."
+          # 1. СНАЧАЛА проверяем: если это ручной запуск — сразу разрешаем и выходим.
+          # Никакой математики, никаких ошибок.
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+             echo "🔵 Ручной запуск: РАЗРЕШАЕМ."
+             echo "should_run=true" >> $GITHUB_OUTPUT
+             exit 0
           fi
 
+          # 2. Если мы здесь, значит запуск по расписанию. Считаем неделю.
+          # Используем python для надежности, чтобы bash не ругался на цифры.
+          python3 -c "import datetime; w = datetime.date.today().isocalendar()[1]; print(f'Week: {w}'); print('should_run=true') if w % 2 != 0 else print('should_run=false')" >> $GITHUB_OUTPUT
+
       - name: Checkout code
-        if: steps.check_week.outputs.is_even == 'true'
+        # Этот шаг (и следующие) сработает, только если should_run = true
+        if: steps.check.outputs.should_run == 'true'
         uses: actions/checkout@v3
 
       - name: Set up Python
-        if: steps.check_week.outputs.is_even == 'true'
+        if: steps.check.outputs.should_run == 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        if: steps.check_week.outputs.is_even == 'true'
+        if: steps.check.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Write Google creds
-        if: steps.check_week.outputs.is_even == 'true'
+        if: steps.check.outputs.should_run == 'true'
         run: |
           cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
           ${{ secrets.GCP_CREDENTIALS }}
           EOF
 
       - name: Run keyword_kz
-        if: steps.check_week.outputs.is_even == 'true'
+        if: steps.check.outputs.should_run == 'true'
         env:
           TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
         run: python keyword_kz.py
