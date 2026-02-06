@@ -23,29 +23,22 @@ jobs:
     steps:
 
       - name: Check even week number
-
         id: check_week
-
         shell: bash
-
         run: |
+          # Считаем номер недели
+          week_num=$(date +%-V)
+          echo "Неделя: $week_num"
+          echo "Тип запуска: ${{ github.event_name }}"
 
-          # Получаем номер ISO-недели (01..53)
-
-          week_num=$(date +%V)
-
-          echo "Сегодня неделя №${week_num}"
-
-
-
-          if (( week_num % 2 != 0 )); then
-
-            echo "::set-output name=is_even::true"
-
+          # ЛОГИКА:
+          # Запускаем, если: (неделя нечетная) ИЛИ (нажата кнопка запуска)
+          if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+             echo "is_even=true" >> $GITHUB_OUTPUT
+             echo "✅ Условие выполнено. Запускаем."
           else
-
-            echo "::set-output name=is_even::false"
-
+             echo "is_even=false" >> $GITHUB_OUTPUT
+             echo "⛔ Условие не выполнено. Пропускаем."
           fi
 
 
