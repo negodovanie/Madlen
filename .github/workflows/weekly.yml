@@ -1,35 +1,109 @@
 name: Run keyword_kz bi-weekly
 
+
+
 on:
+
   schedule:
-    - cron: '0 3 * * 1'    # По понедельникам в 06:00 MSK
-  workflow_dispatch:       # Кнопка для ручного запуска
+
+    - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC (06:00 MSK)
+
+  workflow_dispatch:
+
+
 
 jobs:
+
   biweekly:
+
     runs-on: ubuntu-latest
 
+
+
     steps:
+
+      - name: Check even week number
+
+        id: check_week
+
+        shell: bash
+
+        run: |
+
+          # Получаем номер ISO-недели (01..53)
+
+          week_num=$(date +%V)
+
+          echo "Сегодня неделя №${week_num}"
+
+
+
+          if (( week_num % 2 != 0 )); then
+
+            echo "::set-output name=is_even::true"
+
+          else
+
+            echo "::set-output name=is_even::false"
+
+          fi
+
+
+
+      # дальше все шаги — только если неделя чётная
+
       - name: Checkout code
+
+        if: steps.check_week.outputs.is_even == 'true'
+
         uses: actions/checkout@v3
 
+
+
       - name: Set up Python
+
+        if: steps.check_week.outputs.is_even == 'true'
+
         uses: actions/setup-python@v4
+
         with:
+
           python-version: '3.10'
 
+
+
       - name: Install dependencies
+
+        if: steps.check_week.outputs.is_even == 'true'
+
         run: |
+
           python -m pip install --upgrade pip
+
           pip install -r requirements.txt
 
+
+
       - name: Write Google creds
+
+        if: steps.check_week.outputs.is_even == 'true'
+
         run: |
+
           cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
+
           ${{ secrets.GCP_CREDENTIALS }}
+
           EOF
 
+
+
       - name: Run keyword_kz
+
+        if: steps.check_week.outputs.is_even == 'true'
+
         env:
+
           TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
+
         run: python keyword_kz.py
