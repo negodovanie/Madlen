@@ -14,17 +14,21 @@ jobs:
         id: check_week
         shell: bash
         run: |
-          # Получаем номер ISO-недели
-          week_num=$(date +%V)
-          echo "Сегодня неделя №${week_num}"
+          # Получаем номер недели (например, 06)
+          week_str=$(date +%V)
+          # Преобразуем в число (убираем ноль в начале, чтобы не было ошибки 08/09)
+          week_num=$((10#$week_str))
+          
+          echo "Сегодня неделя №$week_num"
+          echo "Событие: ${{ github.event_name }}"
 
-          # ИЗМЕНЕНИЕ: Разрешаем запуск, если неделя нечетная ИЛИ (||) если это ручной запуск
-          if (( week_num % 2 != 0 )) || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "::set-output name=is_even::true"
-            echo "Принудительный запуск или подходящая неделя. Работаем."
+          # Условие: (Неделя нечетная) ИЛИ (Ручной запуск кнопкой)
+          if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "is_even=true" >> $GITHUB_OUTPUT
+            echo "✅ РЕШЕНИЕ: Запускаем (нечетная неделя или ручной старт)."
           else
-            echo "::set-output name=is_even::false"
-            echo "Неделя не подходит, пропускаем."
+            echo "is_even=false" >> $GITHUB_OUTPUT
+            echo "⛔ РЕШЕНИЕ: Пропускаем (четная неделя)."
           fi
 
       # дальше все шаги — только если неделя чётная
