@@ -17,13 +17,13 @@ jobs:
           week_num=$(date +%-V)
           echo "Неделя: $week_num"
           
-          # Если (неделя нечетная) ИЛИ (нажата кнопка) -> should_run=true
+          # Запускаем, если (неделя нечетная) ИЛИ (нажата кнопка)
           if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
              echo "should_run=true" >> $GITHUB_OUTPUT
-             echo "✅ Запускаем."
+             echo "✅ Условие выполнено."
           else
              echo "should_run=false" >> $GITHUB_OUTPUT
-             echo "⛔ Пропускаем."
+             echo "⛔ Пропускаем (четная неделя)."
           fi
 
       - name: Checkout code
@@ -42,13 +42,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ВЕРНУЛИ ВАШ СТАРЫЙ МЕТОД (CAT), КОТОРЫЙ РАБОТАЛ РАНЬШЕ
+      # САМЫЙ НАДЕЖНЫЙ МЕТОД: Python запишет файл напрямую без лишних пробелов
       - name: Write Google creds
         if: steps.check_week.outputs.should_run == 'true'
+        env:
+          GCP_JSON: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          cat << 'EOF' > level-landing-195008-a8940ac6b2ab.json
-          ${{ secrets.GCP_CREDENTIALS }}
-          EOF
+          python3 -c "import os; open('level-landing-195008-a8940ac6b2ab.json', 'w').write(os.environ['GCP_JSON'])"
 
       - name: Run keyword_kz
         if: steps.check_week.outputs.should_run == 'true'
