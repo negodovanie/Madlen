@@ -3,23 +3,26 @@ name: Run keyword_kz bi-weekly
 on:
   schedule:
     - cron: '0 3 * * 1'    # каждый понедельник в 03:00 UTC (06:00 MSK)
-  workflow_dispatch:
+  workflow_dispatch:       # Разрешает ручной запуск кнопкой
 
 jobs:
   biweekly:
     runs-on: ubuntu-latest
 
     steps:
-     - name: Check even week number
+      - name: Check even week number
         id: check_week
         shell: bash
         run: |
-          # %-V (с минусом) убирает ведущий ноль. Например, будет "6", а не "06".
-          week_num=$(date +%-V)
+          # Получаем номер недели (01-53)
+          week_str=$(date +%V)
+          # Переводим в число (удаляем ведущий ноль через 10#), чтобы не было ошибок с 08/09
+          week_num=$((10#$week_str))
+          
           echo "Текущая неделя: $week_num"
           echo "Тип запуска: ${{ github.event_name }}"
 
-          # Проверка: (нечетная неделя) ИЛИ (ручной запуск workflow_dispatch)
+          # Условие: Если (неделя нечетная) ИЛИ (запуск кнопкой)
           if [ $((week_num % 2)) -ne 0 ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "is_even=true" >> $GITHUB_OUTPUT
             echo "✅ РЕШЕНИЕ: Запускаем."
@@ -28,7 +31,6 @@ jobs:
             echo "⛔ РЕШЕНИЕ: Пропускаем."
           fi
 
-      # дальше все шаги — только если неделя чётная
       - name: Checkout code
         if: steps.check_week.outputs.is_even == 'true'
         uses: actions/checkout@v3
