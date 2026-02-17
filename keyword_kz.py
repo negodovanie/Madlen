@@ -32,6 +32,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+# Пишем логи и в файл, и в консоль (чтобы было видно в GitHub Actions)
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(console)
+logger.propagate = False
+
 
 
 def retry_on_quota(func, *args, max_attempts=5, initial_delay=10, **kwargs):
