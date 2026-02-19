@@ -32,4 +32,17 @@ jobs:
       - name: Run keyword_kz
         env:
           TOKEN: ${{ secrets.KEYWORD_API_TOKEN }}
+          DEBUG_DUMP: "0"
+          LOG_EVERY_N: "50"
+          HTTP_TIMEOUT: "60"
+          RATE_LIMIT_DELAY: "2"
         run: python keyword_kz.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyword_kz_logs
+          path: |
+            keyword_kz.log
+          if-no-files-found: ignore
