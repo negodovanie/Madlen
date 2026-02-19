@@ -11,33 +11,35 @@ import re
 import os
 from gspread.exceptions import APIError
 
-
 # ---------------- НАСТРОЙКИ ------------------
 LOG_FILE = "keyword_kz.log"
 
-# НЕ ТРОГАЮ: дефолтный токен как был, но если в env задан TOKEN — используем его (чтобы Actions работал через secrets)
-DEFAULT_TOKEN = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
-TOKEN = os.getenv("TOKEN", DEFAULT_TOKEN)
+# НЕ ТРОГАЮ: твой токен остаётся дефолтом как есть.
+# Но если в окружении передан TOKEN (GitHub Actions secrets) — используем его, это не ломает локальный запуск.
+TOKEN_DEFAULT = "kPQGRMFx7JYdJ3mqQyqGF62CRtPGKTb7"
+TOKEN = os.getenv("TOKEN", TOKEN_DEFAULT)
 
 EXCEL_FILE = "keywords_full_data.xlsx"
 CREDS_FILE = "level-landing-195008-a8940ac6b2ab.json"
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1tvLCWC5WhBnQAFQpoJsVUXnjtDlzjRbJwzmsYgM8b8c/edit?gid=639673523#gid=639673523"
 
-# Пауза между запросами к keyword.com (оставляю как было, но можно тюнить env)
-RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "2"))
-
-# Антизависание HTTP
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
+# Паузы/таймауты (можно переопределять env)
+RATE_LIMIT_DELAY = float(os.getenv("RATE_LIMIT_DELAY", "2"))   # пауза между запросами к keyword.com
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))          # антизависание HTTP
+GS_SLEEP = float(os.getenv("GS_SLEEP", "2"))                   # пауза после операций Google Sheets
+SHEET_SLEEP = float(os.getenv("SHEET_SLEEP", "3"))             # пауза между листами
 
 # Отладочные дампы (по умолчанию ВЫКЛ, чтобы не раздувать диск)
 DEBUG_DUMP = os.getenv("DEBUG_DUMP", "0") in ("1", "true", "True")
 
-# Частота прогресса в логах (по умолчанию 50)
+# Прогресс в логах: каждые N ключей
 LOG_EVERY_N = int(os.getenv("LOG_EVERY_N", "50"))
 
-# Паузы после операций с Google Sheets (по умолчанию 2 сек, как у тебя)
-GS_SLEEP = float(os.getenv("GS_SLEEP", "2"))
-SHEET_SLEEP = float(os.getenv("SHEET_SLEEP", "3"))
+# Поведение записи конкурентных URL для matched:
+# 0 (по умолчанию) — писать URL только в первую вставленную строку (как было фактически).
+# 1 — писать URL в каждую вставленную строку.
+WRITE_URLS_EACH_INSERTED_ROW = os.getenv("WRITE_URLS_EACH_INSERTED_ROW", "0") in ("1", "true", "True")
+
 
 # ---------------- ЛОГИРОВАНИЕ ------------------
 logging.basicConfig(
@@ -50,14 +52,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Логи в stdout (чтобы GitHub Actions показывал прогресс)
+# stdout лог, чтобы GitHub Actions показывал прогресс
 _console = logging.StreamHandler(sys.stdout)
 _console.setLevel(logging.INFO)
 _console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logger.addHandler(_console)
 
 
-# ---------------- УТИЛИТЫ ------------------
+# ---------------- HELPERS ------------------
 def retry_on_quota(func, *args, max_attempts=5, initial_delay=10, **kwargs):
     """
     Пробует вызвать func(*args, **kwargs), при APIError 429 — ждёт и повторяет.
@@ -71,9 +73,7 @@ def retry_on_quota(func, *args, max_attempts=5, initial_delay=10, **kwargs):
             if "429" in text or "quota" in text.lower():
                 logger.warning(
                     "Quota exceeded (attempt %d/%d). Sleep %s sec and retry...",
-                    attempt,
-                    max_attempts,
-                    delay,
+                    attempt, max_attempts, delay
                 )
                 time.sleep(delay)
                 delay *= 2
@@ -107,44 +107,80 @@ def find_analysis_sheets(spreadsheet_url, creds_file):
     return [ws for ws in sh.worksheets() if "анализ" in ws.title.lower()]
 
 
+def normalize_url(u: str) -> str:
+    u = str(u).strip().lower()
+    u = re.sub(r"^https?://", "", u)
+    u = re.sub(r"^www\.", "", u)
+    return u.rstrip("/")
+
+
 def get_dates():
     """
     ВАЖНО:
-    - Для API берём "за вчера" (обычно метрики стабильны за завершённый день).
-    - В таблицу пишем "сегодня" (дата запуска).
+      - API берём за "вчера" (стабильный закрытый день)
+      - В Google Sheet пишем "сегодня" (дата запуска)
     """
     today = datetime.today()
     yesterday = today - timedelta(days=1)
     twoweek = today - timedelta(days=14)
 
-    single = yesterday.strftime("%Y-%m-%d")  # API date
-    twoweek_s = twoweek.strftime("%Y-%m-%d")
-    date_range = f"{twoweek_s}.{single}"
-    target = yesterday.strftime("%b %d, %Y")  # API history date
+    single = yesterday.strftime("%Y-%m-%d")
+    date_range = f"{twoweek.strftime('%Y-%m-%d')}.{single}"
+    target = yesterday.strftime("%b %d, %Y")
 
-    gs_date = today.strftime("%d.%m.%Y")  # дата запуска в гугл-таблицу
+    gs_date = today.strftime("%d.%m.%Y")
 
     return single, date_range, target, gs_date
 
 
 # ---------------- KEYWORD.COM API ------------------
 def fetch_keywords(project_name, single_date, headers):
+    """
+    ПОЛНОЕ получение всех ключей с пагинацией.
+    """
     url = f"https://app.keyword.com/api/v2/groups/{project_name}/keywords/"
-    params = {"per_page": 250, "page": 1, "date": single_date}
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=HTTP_TIMEOUT)
-    except Exception as e:
-        logger.exception("(%s) HTTP error keywords: %s", project_name, e)
-        return []
+    per_page = 250
+    page = 1
+    all_data = []
 
-    if resp.status_code != 200:
-        logger.error("(%s) keywords status=%s body=%s", project_name, resp.status_code, resp.text[:500])
-        return []
+    while True:
+        params = {"per_page": per_page, "page": page, "date": single_date}
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=HTTP_TIMEOUT)
+        except Exception as e:
+            logger.exception("(%s) HTTP error keywords page=%d: %s", project_name, page, e)
+            break
 
-    return resp.json().get("data", [])
+        if resp.status_code != 200:
+            logger.error("(%s) keywords status=%s page=%d body=%s",
+                         project_name, resp.status_code, page, resp.text[:500])
+            break
+
+        try:
+            data = resp.json().get("data", [])
+        except Exception as e:
+            logger.exception("(%s) JSON parse error keywords page=%d: %s", project_name, page, e)
+            break
+
+        if not data:
+            break
+
+        all_data.extend(data)
+
+        if len(data) < per_page:
+            break
+
+        page += 1
+
+    logger.info("(%s) keywords fetched total: %d", project_name, len(all_data))
+    return all_data
 
 
 def fetch_competitors_history(project_name, keyword_id, date_range, headers):
+    """
+    История конкурентов для keyword_id.
+    Дампы пишем только при DEBUG_DUMP=1.
+    """
     url = f"https://app.keyword.com/api/v2/metrics/{project_name}/competitors/{keyword_id}/history"
     params = {"dateRange": date_range}
 
@@ -155,16 +191,10 @@ def fetch_competitors_history(project_name, keyword_id, date_range, headers):
         return []
 
     if resp.status_code != 200:
-        logger.error(
-            "(%s) history status=%s keyword_id=%s body=%s",
-            project_name,
-            resp.status_code,
-            keyword_id,
-            resp.text[:500],
-        )
+        logger.error("(%s) history status=%s keyword_id=%s body=%s",
+                     project_name, resp.status_code, keyword_id, resp.text[:500])
         return []
 
-    # дамп полного ответа — только при DEBUG_DUMP=1
     if DEBUG_DUMP:
         dump_dir = "debug_history"
         os.makedirs(dump_dir, exist_ok=True)
@@ -187,23 +217,28 @@ def fetch_competitors_history(project_name, keyword_id, date_range, headers):
 # ---------------- EXCEL BUILD ------------------
 def build_sheet_data(project_name, keywords_data, date_range, target_date, headers):
     """
-    first  — строки для листа Keywords,
-    second — строки для листа Competitors.
+    first  — строки для Keywords
+    second — строки для Competitors
 
-    Если в history нет блока по target_date — берём самый свежий блок.
+    Логи: прогресс каждые LOG_EVERY_N.
     """
     first, second = [], []
-
     total = len(keywords_data)
 
     for idx, item in enumerate(keywords_data, start=1):
-        kid = item["id"]
-        attr = item.get("attributes", {})
-        kw = attr.get("kw")
-        ru = attr.get("rankingurl")
-        ua = attr.get("updated_at")
+        kid = item.get("id")
+        attr = item.get("attributes", {}) or {}
 
-        first.append({"ID": kid, "Keyword": kw, "Ranking URL": ru, "Updated At": ua})
+        kw = attr.get("kw") or ""
+        ru = attr.get("rankingurl") or ""
+        ua = attr.get("updated_at") or ""
+
+        first.append({
+            "ID": kid,
+            "Keyword": kw,
+            "Ranking URL": ru,
+            "Updated At": ua
+        })
 
         history = fetch_competitors_history(project_name, kid, date_range, headers)
 
@@ -215,13 +250,17 @@ def build_sheet_data(project_name, keywords_data, date_range, target_date, heade
                     return datetime.strptime(b.get("date", ""), "%b %d, %Y")
                 except Exception:
                     return datetime.min
-
             chosen = max(history, key=parse_blk_date)
 
         if chosen:
             ctr = 1
-            for res in chosen.get("results", []):
-                second.append({"ID": kid, "Keyword": kw, "URL": res.get("url"), "Row Number": ctr})
+            for res in chosen.get("results", []) or []:
+                second.append({
+                    "ID": kid,
+                    "Keyword": kw,
+                    "URL": res.get("url"),
+                    "Row Number": ctr
+                })
                 ctr += 1
 
         if idx % LOG_EVERY_N == 0 or idx == total:
@@ -239,22 +278,15 @@ def save_to_excel(first_sheet, second_sheet, filename):
     logger.info("Excel exported: %s", filename)
 
 
-# ---------------- GOOGLE SHEETS ------------------
-def normalize_url(u: str) -> str:
-    u = u.strip().lower()
-    u = re.sub(r"^https?://", "", u)
-    u = re.sub(r"^www\.", "", u)
-    return u.rstrip("/")
-
-
+# ---------------- GOOGLE SHEETS MAPS ------------------
 def build_gs_map(ws):
     """
-    keyword -> row_number из столбца B (только keyword, без URL).
+    keyword -> row_number из столбца B
     """
-    col_b = ws.col_values(2)  # B
+    col_b = ws.col_values(2)
     gs_map = {}
-    for i in range(1, len(col_b)):  # пропускаем заголовок
-        kw = col_b[i].strip().lower()
+    for i in range(1, len(col_b)):  # skip header
+        kw = str(col_b[i]).strip().lower()
         if kw:
             gs_map[kw] = i + 1
     return gs_map
@@ -262,26 +294,31 @@ def build_gs_map(ws):
 
 def build_competitors_map(comp_df):
     """
-    (keyword, normalized_url) -> [row_numbers]
+    (keyword, normalized_url) -> [Row Number]
     """
     cmap = {}
     for _, r in comp_df.iterrows():
-        kw = str(r["Keyword"]).strip().lower()
-        u = normalize_url(str(r["URL"]))
-        rn = r["Row Number"]
-        cmap.setdefault((kw, u), []).append(rn)
+        kw = str(r.get("Keyword", "")).strip().lower()
+        u = normalize_url(r.get("URL", ""))
+        rn = r.get("Row Number", "")
+        if kw and u:
+            cmap.setdefault((kw, u), []).append(rn)
     return cmap
 
 
 def build_competitors_keyword_map(comp_df, domain):
     """
-    Keyword -> список URL конкурентов (без текущего домена и запрещённых подстрок)
+    Keyword -> list(url) of competitors excluding our domain and forbidden substrings.
     """
     kw_map = {}
     forbidden_substrings = ["2gis", "m.olx", "kaspi", "olx"]
+
     for _, r in comp_df.iterrows():
-        kw = str(r["Keyword"]).strip().lower()
-        url = str(r["URL"]).strip()
+        kw = str(r.get("Keyword", "")).strip().lower()
+        url = str(r.get("URL", "")).strip()
+        if not kw or not url:
+            continue
+
         url_lc = url.lower()
 
         if domain in url:
@@ -290,20 +327,22 @@ def build_competitors_keyword_map(comp_df, domain):
             continue
 
         kw_map.setdefault(kw, []).append(url)
+
     return kw_map
 
 
+# ---------------- GOOGLE SHEETS UPDATE ------------------
 def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
     CITY_COL = 4
-    COMP_COLS = [13, 20, 27]  # M, T, AA
+    COMP_COLS = [13, 20, 27]          # M, T, AA
     FORMULA_COLS = [11, 19, 26, 33, 39, 45]  # K, S, Z, AG, AM, AS
 
     matched = []
     new = []
 
     for _, r in kw_df.iterrows():
-        kw = str(r["Keyword"]).strip()
-        ru0 = str(r["Ranking URL"]).strip()
+        kw = str(r.get("Keyword", "")).strip()
+        ru0 = str(r.get("Ranking URL", "")).strip()
         kw_lc = kw.lower()
 
         gs_row = gs_map.get(kw_lc)
@@ -318,7 +357,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
 
     matched.sort(key=lambda x: x["gs_row"], reverse=True)
 
-    # --- matched: вставляем строки под найденной строкой ---
+    # --- matched: вставка строк ---
     for item in matched:
         kw = item["kw"]
         ru0 = item["ru0"]
@@ -327,6 +366,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
         urls = item["urls"]
 
         prev_city = ws.cell(gs_row, CITY_COL).value or ""
+
         new_rows = [[gs_date, kw, ru0, prev_city, rn] for rn in rns]
         insert_at = gs_row + 1
         num_rows = len(new_rows)
@@ -338,42 +378,51 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
             sheet_id = ws._properties["sheetId"]
             copy_requests = []
 
+            # копируем формулы из строки-источника в каждую вставленную строку
             for offset in range(len(new_rows)):
                 src_row = insert_at - 1
                 dst_row = insert_at + offset
 
                 for col in FORMULA_COLS:
-                    copy_requests.append(
-                        {
-                            "copyPaste": {
-                                "source": {
-                                    "sheetId": sheet_id,
-                                    "startRowIndex": src_row - 1,
-                                    "endRowIndex": src_row,
-                                    "startColumnIndex": col - 1,
-                                    "endColumnIndex": col,
-                                },
-                                "destination": {
-                                    "sheetId": sheet_id,
-                                    "startRowIndex": dst_row - 1,
-                                    "endRowIndex": dst_row,
-                                    "startColumnIndex": col - 1,
-                                    "endColumnIndex": col,
-                                },
-                                "pasteType": "PASTE_FORMULA",
-                                "pasteOrientation": "NORMAL",
-                            }
+                    copy_requests.append({
+                        "copyPaste": {
+                            "source": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": src_row - 1,
+                                "endRowIndex": src_row,
+                                "startColumnIndex": col - 1,
+                                "endColumnIndex": col
+                            },
+                            "destination": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": dst_row - 1,
+                                "endRowIndex": dst_row,
+                                "startColumnIndex": col - 1,
+                                "endColumnIndex": col
+                            },
+                            "pasteType": "PASTE_FORMULA",
+                            "pasteOrientation": "NORMAL"
                         }
-                    )
+                    })
 
             if copy_requests:
                 retry_on_quota(ws.spreadsheet.batch_update, {"requests": copy_requests})
 
-            # Пишем конкурентные URL в первую вставленную строку (как у тебя было фактически)
+            # запись конкурентных URL
             batch = []
-            for i, url in enumerate(urls):
-                cell = rowcol_to_a1(insert_at, COMP_COLS[i])
-                batch.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
+            if urls:
+                if WRITE_URLS_EACH_INSERTED_ROW:
+                    # пишем URL в каждую вставленную строку
+                    for offset in range(len(new_rows)):
+                        dst_row = insert_at + offset
+                        for i, url in enumerate(urls):
+                            cell = rowcol_to_a1(dst_row, COMP_COLS[i])
+                            batch.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
+                else:
+                    # как было фактически: только в первую вставленную строку
+                    for i, url in enumerate(urls):
+                        cell = rowcol_to_a1(insert_at, COMP_COLS[i])
+                        batch.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
 
             if batch:
                 body = {"valueInputOption": "USER_ENTERED", "data": batch}
@@ -386,7 +435,7 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
                 continue
             raise
 
-    # --- new: пишем в первую пустую строку по A ---
+    # --- new: запись в первую пустую строку ---
     batch_new = []
     if new:
         row_ptr = find_first_empty_row_in_col_A(ws)
@@ -399,17 +448,16 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
 
             first_rn = rns[0] if rns else ""
 
-            batch_new.append(
-                {
-                    "range": f"'{ws.title}'!A{row_ptr}:E{row_ptr}",
-                    "values": [[gs_date, kw, ru0, "", first_rn]],
-                }
-            )
+            batch_new.append({
+                "range": f"'{ws.title}'!A{row_ptr}:E{row_ptr}",
+                "values": [[gs_date, kw, ru0, "", first_rn]]
+            })
 
             for i, url in enumerate(urls):
                 cell = rowcol_to_a1(row_ptr, COMP_COLS[i])
                 batch_new.append({"range": f"'{ws.title}'!{cell}", "values": [[url]]})
 
+            # gs_map у нас только keyword -> row
             gs_map[kw.lower()] = row_ptr
             row_ptr += 1
 
@@ -418,14 +466,14 @@ def update_google_sheet(ws, kw_df, comp_map, gs_map, comp_kw_map, gs_date):
         retry_on_quota(ws.spreadsheet.values_batch_update, body)
 
 
-# ---------------- MAIN PIPELINE ------------------
+# ---------------- PIPELINE ------------------
 def process_sheet(ws, single_date, date_range, target_date, gs_date, headers):
     project_name = ws.acell("AT1").value
     if not project_name or not project_name.strip():
         logger.warning("Skip %s — AT1 is empty", ws.title)
         return
-
     project_name = project_name.strip()
+
     logger.info("=== Start sheet '%s' (project=%s) ===", ws.title, project_name)
 
     kws = fetch_keywords(project_name, single_date, headers)
@@ -437,7 +485,7 @@ def process_sheet(ws, single_date, date_range, target_date, gs_date, headers):
 
     save_to_excel(fst, snd, EXCEL_FILE)
 
-    # доп. дампы Excel только при DEBUG_DUMP=1 (чтобы не раздувать диск)
+    # лишние Excel-дампы по листам только в DEBUG
     if DEBUG_DUMP:
         safe_title = ws.title.replace(" ", "_").replace("/", "_")
         copy_name = f"keywords_full_data_{safe_title}.xlsx"
