@@ -36,6 +36,9 @@ jobs:
           LOG_EVERY_N: "50"
           HTTP_TIMEOUT: "60"
           RATE_LIMIT_DELAY: "2"
+          GS_SLEEP: "2"
+          SHEET_SLEEP: "3"
+          WRITE_URLS_EACH_INSERTED_ROW: "0"
         run: python keyword_kz.py
 
       - name: Upload logs
